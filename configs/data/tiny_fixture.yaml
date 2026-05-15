@@ -1,0 +1,17 @@
+name: tiny_fixture
+provider: csv_fixture
+path: tests/fixtures/tiny_logged_bandit.csv
+candidate_mode: all_actions
+n_actions: 5
+context_columns:
+  - context_0
+  - context_1
+action_column: action
+reward_column: reward
+pscore_column: pscore
+position_column: position
+split:
+  strategy: deterministic_random
+  valid_size: 0.2
+  test_size: 0.2
+  seed: 42

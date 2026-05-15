@@ -1,0 +1,22 @@
+actor:
+  hidden_dim: 128
+  num_layers: 3
+  dropout: 0.1
+  temperature: 0.5
+  top_k_before_sparsemax: 20
+  policy_head: sparsemax
+
+reward_model:
+  hidden_dim: 128
+  num_layers: 3
+  dropout: 0.1
+  reward_type: binary
+  # Weighted-BCE logits are calibrated before q_hat is used by actor training or DR OPE.
+  # Options: none | auto_logit_correction | platt
+  calibration: platt
+
+behavior_model:
+  hidden_dim: 128
+  num_layers: 2
+  dropout: 0.1
+  train_if_full_behavior_probs_missing: true

@@ -1,0 +1,33 @@
+batch_size: 512
+num_workers: 4
+
+behavior:
+  epochs: 5
+  learning_rate: 0.001
+  weight_decay: 0.00001
+
+reward:
+  # Default calibrated reward challenger A from full Open Bandit reward-HPO trial 2.
+  epochs: 15
+  loss_type: focal
+  pos_weight: auto
+  focal_alpha: 0.75
+  focal_gamma: 2.0
+  negative_downsample_ratio: 0.2
+  learning_rate: 0.0011265466963346032
+  weight_decay: 0.00001
+
+actor:
+  epochs: 20
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  alpha: 1.5
+  beta_alpha: 0.01
+  lambda_tsallis: 0.0
+  lambda_support: 1.0
+  mu_min: 0.0001
+  importance_clip: 20.0
+  reward_value_scale: 100.0
+  gradient_clip_norm: 1.0
+  freeze_behavior_model: true
+  freeze_reward_model: true

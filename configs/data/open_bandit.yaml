@@ -1,0 +1,28 @@
+name: open_bandit
+provider: obp
+data_path: data/open_bandit
+download: true
+download_url: https://research.zozo.com/data_release/open_bandit_dataset.zip
+campaign: all
+behavior_policy: bts
+len_list: 3
+
+columns:
+  context: context
+  action: action
+  reward: reward
+  position: position
+  pscore: pscore
+
+candidate_mode: all_actions
+
+split:
+  strategy: chronological
+  valid_size: 0.1
+  test_size: 0.2
+  seed: 42
+
+propensity:
+  source: logged_pscore
+  min_value: 0.0001
+  clip_max: 20.0

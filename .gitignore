@@ -1,0 +1,72 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+env/
+ENV/
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets and local overrides
+.env
+.env.*
+!.env.example
+*.local
+
+# Local runtime state
+.o[m]x/
+
+# Experiment tracking and runtime state
+state/
+runs/
+mlruns/
+wandb/
+lightning_logs/
+
+# Data and generated artifacts
+# Test fixtures live under tests/fixtures.
+data/*
+!data/README.md
+outputs/*
+!outputs/README.md
+artifacts/
+checkpoints/
+
+# Large model, dataset, and database artifacts
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz

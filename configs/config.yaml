@@ -1,0 +1,11 @@
+defaults:
+  - data: open_bandit
+  - model: sparse_tsallis_actor
+  - train: full_pipeline
+  - eval: ope
+  - _self_
+
+seed: 42
+device: auto
+output_dir: outputs
+run_name: bandit_stor_mvp

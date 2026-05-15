@@ -1,0 +1,77 @@
+study_name: bandit_stor_actor_hpo_reward_lift_v3
+storage: sqlite:///outputs/optuna/bandit_stor_actor_hpo.db
+direction: maximize
+n_trials: 20
+timeout: null
+sampler_seed: 42
+mode: reward_aggressive
+max_train_rows: 100000
+max_valid_rows: 50000
+
+score:
+  max_weight_penalty: 0.00005
+  ess_penalty: 0.01
+  alpha_penalty: 0.0001
+  entropy_penalty: 0.001
+  support_size_penalty: 0.00001
+
+gates:
+  hard:
+    min_eval_n: 50000
+    max_importance_weight_catastrophic: 40.0
+    ess_ratio_catastrophic_min: 0.03
+    max_lift_disagreement: 0.002
+    unsupported_action_mass_max: 0.01
+  preferred:
+    max_importance_weight: 30.0
+    ess_ratio: 0.05
+    alpha_divergence: 6.0
+  sparsity:
+    min_avg_support_size: 5
+    max_avg_support_size: 50
+    max_entropy_ratio: 0.99
+    min_entropy_ratio: 0.20
+  bootstrap:
+    min_dr_lift_p05: null
+
+modes:
+  reward_aggressive:
+    preferred:
+      max_importance_weight: 30.0
+      ess_ratio: 0.05
+      alpha_divergence: 6.0
+    sparsity:
+      max_avg_support_size: 50
+    bootstrap:
+      min_dr_lift_p05: null
+  deployment_conservative:
+    preferred:
+      max_importance_weight: 15.0
+      ess_ratio: 0.20
+      alpha_divergence: 2.0
+    sparsity:
+      max_avg_support_size: 50
+    bootstrap:
+      min_dr_lift_p05: 0.0
+
+robust_estimators:
+  switch_tau: 25.0
+  dros_lambda: 1.0
+
+reward_sanity:
+  prediction_mean_max_multiple_of_base_rate: 5.0
+  prediction_mean_min_multiple_of_base_rate: 0.2
+  log_loss_must_not_exceed_constant_by_more_than: 0.005
+  ece_max: 0.01
+  auc_pr_lift_min: 1.05
+
+search_space:
+  actor_learning_rate: {low: 0.00005, high: 0.0008, log: true}
+  actor_weight_decay: {low: 0.00000001, high: 0.001, log: true}
+  temperature: {choices: [0.75, 1.0, 1.25]}
+  top_k_before_sparsemax: {choices: [20, 30, 40, 50, 60]}
+  beta_alpha: {choices: [0.1, 0.3, 1.0, 3.0]}
+  lambda_tsallis: {choices: [0.001, 0.005, 0.01]}
+  lambda_support: {choices: [0.0, 0.1, 1.0]}
+  actor_epochs: {choices: [5, 10]}
+  reward_value_scale: {choices: [10.0, 30.0, 100.0]}

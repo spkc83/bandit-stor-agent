@@ -55,7 +55,7 @@ pytest
 python scripts/run_full_pipeline.py data=tiny_fixture
 ```
 
-The tiny fixture path is for tests only, not benchmark training. The default Open Bandit path never falls back to synthetic data: it first uses prepared `data/open_bandit/logged_bandit.csv` / `.parquet` containing logged `pscore`, then local OBP-layout files under `data/open_bandit/{behavior_policy}/{campaign}/`. When `download: true`, the adapter downloads and extracts the official full Open Bandit Dataset zip into `data_path`; it no longer silently uses OBP's packaged small example.
+The tiny fixture path is for tests only, not benchmark training. The default Open Bandit path never falls back to synthetic data: it first uses prepared `data/open_bandit/logged_bandit.csv` / `.parquet` containing logged `pscore`, then local OBP-layout files under `data/open_bandit/{behavior_policy}/{campaign}/`. When `download: true`, the adapter downloads and extracts the official full Open Bandit Dataset zip into `data_path`; it no longer silently uses OBP's packaged small example. OBP-layout CSVs are loaded directly with Polars rather than OBP's pandas loader so full-dataset runs project only the columns required by Bandit-STOR.
 
 ## Data and Outputs
 
@@ -101,4 +101,3 @@ For Open Bandit `behavior_policy: random`, the full behavior distribution is kno
 ## License
 
 Bandit-STOR is released under the MIT License. See `LICENSE` for details. Dataset licenses and terms remain governed by their upstream providers; do not redistribute local Open Bandit downloads or proprietary logs from this repository.
-

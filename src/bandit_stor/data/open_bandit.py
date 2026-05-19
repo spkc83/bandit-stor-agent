@@ -9,9 +9,8 @@ from urllib.request import urlretrieve
 from zipfile import ZipFile
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import torch
-from sklearn.preprocessing import LabelEncoder
 
 
 from bandit_stor.data.base import (
@@ -136,9 +135,9 @@ def load_csv_logged_bandit(
     if not path.exists():
         raise FileNotFoundError(path)
     if path.suffix.lower() == ".parquet":
-        frame = pd.read_parquet(path)
+        frame = pl.read_parquet(path)
     else:
-        frame = pd.read_csv(path)
+        frame = pl.read_csv(path)
     required = {action_column, reward_column, pscore_column}
     missing = required - set(frame.columns)
     if missing:
@@ -147,9 +146,16 @@ def load_csv_logged_bandit(
         context_columns = [c for c in frame.columns if c.startswith("context_")]
     if not context_columns:
         raise ValueError("No context columns found; pass context_columns or use context_ prefixed columns")
-    if (frame[pscore_column] <= 0).any():
+    pscores = frame[pscore_column].cast(pl.Float32).to_numpy()
+    if (pscores <= 0).any():
         raise ValueError("Logged pscore must be strictly positive")
-    actions = frame[action_column].astype(int).to_numpy()
+    actions = frame[action_column].cast(pl.Int64).to_numpy()
+    rewards = frame[reward_column].cast(pl.Float32).to_numpy()
+    contexts = frame.select(context_columns).to_numpy().astype(np.float32)
+    if position_column in frame.columns:
+        positions = frame[position_column].cast(pl.Int64).to_numpy()
+    else:
+        positions = np.zeros(len(actions), dtype=np.int64)
     inferred_n_actions = int(actions.max()) + 1
     n_actions = int(n_actions or inferred_n_actions)
     if actions.min() < 0 or actions.max() >= n_actions:
@@ -157,18 +163,18 @@ def load_csv_logged_bandit(
     candidates = np.arange(n_actions, dtype=np.int64)
     candidate_action_context = _action_context(candidates, n_actions)
     examples: list[dict[str, Any]] = []
-    for _, row in frame.iterrows():
-        action = int(row[action_column])
-        pscore = float(row[pscore_column])
+    for index in range(len(actions)):
+        action = int(actions[index])
+        pscore = float(pscores[index])
         examples.append(
             {
-                "context": torch.as_tensor(row[context_columns].to_numpy(dtype=np.float32)),
+                "context": torch.as_tensor(contexts[index], dtype=torch.float32),
                 "candidate_actions": torch.as_tensor(candidates, dtype=torch.long),
                 "action_context": candidate_action_context,
                 "logged_action_index": action,
-                "reward": float(row[reward_column]),
+                "reward": float(rewards[index]),
                 "pscore": pscore,
-                "position": int(row[position_column]) if position_column in frame.columns else 0,
+                "position": int(positions[index]),
                 "mask": torch.ones(n_actions, dtype=torch.bool),
                 "behavior_policy_probs": uniform_behavior_from_logged_pscore(n_actions, action, pscore),
             }
@@ -281,6 +287,175 @@ def dataset_from_obp_feedback(feedback: dict[str, Any]) -> LoggedBanditDataset:
     )
 
 
+def _csv_columns(path: Path) -> list[str]:
+    """Return CSV header columns without reading data rows."""
+    return pl.read_csv(path, n_rows=0).columns
+
+
+def _encode_polars_categoricals(frame: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
+    """Encode string categorical columns as normalized numeric features."""
+    if not columns:
+        return pl.DataFrame()
+    encoded = frame.select(
+        [
+            pl.col(column)
+            .cast(pl.Categorical)
+            .to_physical()
+            .cast(pl.Float32)
+            .alias(column)
+            for column in columns
+        ]
+    )
+    max_values = encoded.select(pl.all().max()).row(0)
+    normalizers = {
+        column: float(max_value)
+        for column, max_value in zip(columns, max_values, strict=True)
+        if max_value is not None and float(max_value) > 0.0
+    }
+    if normalizers:
+        encoded = encoded.with_columns(
+            [(pl.col(column) / normalizer).alias(column) for column, normalizer in normalizers.items()]
+        )
+    return encoded
+
+
+def _obp_context_array(frame: pl.DataFrame, user_feature_cols: list[str], encoding: str) -> np.ndarray:
+    """Build context features from OBP user feature columns using Polars."""
+    if not user_feature_cols:
+        raise ValueError("OBP data has no user_feature_* columns for context")
+    if encoding == "one_hot":
+        context_frame = frame.select(user_feature_cols).to_dummies(
+            columns=user_feature_cols, drop_first=True
+        )
+    elif encoding == "categorical_codes":
+        context_frame = _encode_polars_categoricals(frame, user_feature_cols)
+    else:
+        raise ValueError(
+            "Unsupported OBP context_encoding="
+            f"{encoding!r}; expected 'categorical_codes' or 'one_hot'"
+        )
+    return context_frame.to_numpy().astype(np.float32, copy=False)
+
+
+def _obp_action_context_array(item_context_path: Path) -> np.ndarray:
+    """Load and encode OBP item context with Polars."""
+    item_frame = pl.read_csv(item_context_path)
+    if "" in item_frame.columns:
+        item_frame = item_frame.drop("")
+    if "item_id" not in item_frame.columns:
+        raise ValueError(f"OBP item context missing item_id: {item_context_path}")
+    item_frame = item_frame.sort("item_id")
+    item_ids = item_frame["item_id"].cast(pl.Int64).to_numpy()
+    expected_item_ids = np.arange(len(item_ids), dtype=np.int64)
+    if not np.array_equal(item_ids, expected_item_ids):
+        raise ValueError("OBP item_id values must be contiguous and zero-based")
+
+    numeric_cols = [
+        column
+        for column, dtype in zip(item_frame.columns, item_frame.dtypes, strict=True)
+        if column != "item_id" and dtype.is_numeric()
+    ]
+    categorical_cols = [
+        column
+        for column in item_frame.columns
+        if column != "item_id" and column not in set(numeric_cols)
+    ]
+    parts: list[pl.DataFrame] = []
+    if categorical_cols:
+        parts.append(_encode_polars_categoricals(item_frame, categorical_cols))
+    if numeric_cols:
+        parts.append(item_frame.select([pl.col(column).cast(pl.Float32) for column in numeric_cols]))
+    if not parts:
+        raise ValueError(f"OBP item context has no usable feature columns: {item_context_path}")
+    encoded = pl.concat(parts, how="horizontal")
+    return encoded.to_numpy().astype(np.float32, copy=False)
+
+
+def _load_obp_feedback_polars(config: dict[str, Any], obp_root: Path) -> dict[str, Any]:
+    """Load OBP-layout Open Bandit data using Polars instead of OBP's pandas loader."""
+    raw_path = _obp_raw_file_path(config, obp_root)
+    item_context_path = raw_path.parent / "item_context.csv"
+    columns = _csv_columns(raw_path)
+    user_feature_cols = [column for column in columns if column.startswith("user_feature")]
+    required = {"timestamp", "item_id", "position", "click", "propensity_score"}
+    missing = required - set(columns)
+    if missing:
+        raise ValueError(f"OBP data missing required columns: {sorted(missing)}")
+
+    selected_columns = ["timestamp", "item_id", "position", "click", "propensity_score"]
+    selected_columns.extend(user_feature_cols)
+    max_rows = config.get("max_rows")
+    n_rows = int(max_rows) if max_rows is not None else None
+    logger.info(
+        "Reading OBP CSV with Polars: file=%s columns=%s user_feature_cols=%s max_rows=%s",
+        raw_path,
+        len(selected_columns),
+        len(user_feature_cols),
+        n_rows,
+    )
+    frame = pl.read_csv(
+        raw_path,
+        columns=selected_columns,
+        schema_overrides={
+            "item_id": pl.Int64,
+            "position": pl.Int64,
+            "click": pl.Float32,
+            "propensity_score": pl.Float32,
+            **{column: pl.Utf8 for column in user_feature_cols},
+        },
+        infer_schema_length=1000,
+        n_rows=n_rows,
+    )
+    sort_setting = config.get("sort_by_timestamp", "auto")
+    if isinstance(sort_setting, bool):
+        should_sort = sort_setting
+    elif str(sort_setting).lower() == "auto":
+        should_sort = not frame["timestamp"].is_sorted()
+    else:
+        should_sort = str(sort_setting).lower() in {"1", "true", "yes", "on"}
+    if should_sort:
+        logger.info("Sorting OBP rows by timestamp")
+        frame = frame.sort("timestamp")
+    else:
+        logger.info("Keeping OBP source row order for chronological split")
+    logger.info("Loaded OBP rows with Polars: n=%s", frame.height)
+
+    context_encoding = str(config.get("context_encoding", "categorical_codes"))
+    contexts = _obp_context_array(frame, user_feature_cols, context_encoding)
+    action_context = _obp_action_context_array(item_context_path)
+    n_actions = int(action_context.shape[0])
+    actions = frame["item_id"].cast(pl.Int64).to_numpy()
+    rewards = frame["click"].cast(pl.Float32).to_numpy()
+    pscores = frame["propensity_score"].cast(pl.Float32).to_numpy()
+    if (pscores <= 0).any():
+        raise ValueError("OBP logged pscore must be strictly positive")
+    if actions.min() < 0 or actions.max() >= n_actions:
+        raise ValueError("OBP logged action outside item_context candidate range")
+    positions = (
+        frame.select((pl.col("position").rank("dense").cast(pl.Int64) - 1).alias("position"))[
+            "position"
+        ]
+        .to_numpy()
+        .astype(np.int64, copy=False)
+    )
+    logger.info(
+        "Encoded OBP arrays with Polars: context_shape=%s action_context_shape=%s n_actions=%s",
+        contexts.shape,
+        action_context.shape,
+        n_actions,
+    )
+    return {
+        "n_rounds": int(frame.height),
+        "n_actions": n_actions,
+        "action": actions,
+        "position": positions,
+        "reward": rewards,
+        "pscore": pscores,
+        "context": contexts,
+        "action_context": action_context,
+    }
+
+
 def load_open_bandit(config: dict[str, Any]) -> tuple[LoggedBanditDataset, Any]:
     """Load Open Bandit data from local prepared files or OBP.
 
@@ -313,37 +488,12 @@ def load_open_bandit(config: dict[str, Any]) -> tuple[LoggedBanditDataset, Any]:
                 seed=int(split_cfg.get("seed", 42)),
                 strategy=str(split_cfg.get("strategy", "chronological")),
             )
-    try:
-        from obp.dataset import OpenBanditDataset  # type: ignore
-    except Exception as exc:  # pragma: no cover - depends on optional package
-        raise OpenBanditUnavailableError(
-            "Open Bandit data is not prepared locally and optional dependency `obp` is not "
-            "available. Install with `pip install -e \".[obp]\"` or place logged_bandit.csv "
-            f"under {data_path}. No synthetic fallback is used."
-        ) from exc
-    class _Pandas2OpenBanditDataset(OpenBanditDataset):  # type: ignore[misc, valid-type]
-        """OBP loader with pandas-2 compatible preprocessing."""
-
-        def pre_process(self) -> None:  # pragma: no cover - requires optional OBP data
-            user_cols = self.data.columns.str.contains("user_feature")
-            self.context = pd.get_dummies(self.data.loc[:, user_cols], drop_first=True).values
-            item_feature_0 = self.item_context["item_feature_0"]
-            item_feature_cat = self.item_context.drop(columns=["item_feature_0"]).apply(
-                LabelEncoder().fit_transform
-            )
-            self.action_context = pd.concat([item_feature_cat, item_feature_0], axis=1).values
-
     try:  # pragma: no cover - requires external Open Bandit files
         obp_root = _find_obp_data_root(config, data_path)
         if obp_root is None:
             raise FileNotFoundError(_obp_raw_file_path(config, data_path))
         logger.info("Loading OBP-layout Open Bandit data from root=%s", obp_root)
-        obp_dataset = _Pandas2OpenBanditDataset(
-            behavior_policy=str(config.get("behavior_policy", "random")),
-            campaign=str(config.get("campaign", "all")),
-            data_path=obp_root,
-        )
-        feedback = obp_dataset.obtain_batch_bandit_feedback()
+        feedback = _load_obp_feedback_polars(config, obp_root)
     except Exception as exc:  # pragma: no cover - requires external Open Bandit files
         raise OpenBanditUnavailableError(
             "Open Bandit adapter was selected, but local/full downloaded data could not "

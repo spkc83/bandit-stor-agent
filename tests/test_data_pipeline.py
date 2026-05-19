@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from bandit_stor.data.open_bandit import load_tiny_fixture
+from bandit_stor.data.open_bandit import load_open_bandit, load_tiny_fixture
 from bandit_stor.training.full_pipeline import run_full_pipeline
 from bandit_stor.utils import load_yaml
 
@@ -57,3 +57,51 @@ def test_open_bandit_full_download_extracts_official_layout(tmp_path: Path):
     )
     assert (data_path / "random" / "all" / "all.csv").exists()
     assert (data_path / "random" / "all" / "item_context.csv").exists()
+
+
+def test_open_bandit_obp_layout_loads_with_polars(tmp_path: Path):
+    root = tmp_path / "open_bandit" / "random" / "all"
+    root.mkdir(parents=True)
+    (root / "all.csv").write_text(
+        "\n".join(
+            [
+                ",timestamp,item_id,position,click,propensity_score,user_feature_0,user_feature_1",
+                "0,2020-01-01T00:00:03Z,0,1,1,0.5,a,x",
+                "1,2020-01-01T00:00:01Z,1,2,0,0.25,b,x",
+                "2,2020-01-01T00:00:02Z,2,1,1,0.25,a,y",
+                "3,2020-01-01T00:00:04Z,1,2,0,0.25,b,y",
+            ]
+        )
+        + "\n"
+    )
+    (root / "item_context.csv").write_text(
+        "\n".join(
+            [
+                ",item_id,item_feature_0,item_feature_1",
+                "0,0,0.1,red",
+                "1,1,0.2,blue",
+                "2,2,0.3,red",
+            ]
+        )
+        + "\n"
+    )
+
+    dataset, splits = load_open_bandit(
+        {
+            "data_path": str(tmp_path / "open_bandit"),
+            "download": False,
+            "behavior_policy": "random",
+            "campaign": "all",
+            "context_encoding": "categorical_codes",
+            "split": {"strategy": "chronological", "valid_size": 0.25, "test_size": 0.25},
+        }
+    )
+
+    assert len(dataset) == 4
+    assert dataset.context_dim == 2
+    assert dataset.n_actions == 3
+    assert len(splits.train) == 2
+    assert dataset[0]["logged_action_index"] == 1
+    assert dataset[0]["position"] == 1
+    assert dataset[0]["pscore"] == 0.25
+    assert dataset[0]["action_context"].shape[0] == 3

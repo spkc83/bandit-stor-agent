@@ -86,6 +86,14 @@ data/open_bandit/open_bandit_dataset/{behavior_policy}/{campaign}/item_context.c
 
 The full dataset is real logged bandit feedback with true propensity scores. No synthetic fallback or item-frequency propensity is used. The default `behavior_policy` is `bts`; `random` is retained only for uniform-logging diagnostics and skips behavior-model training in favor of exact uniform `mu_probs`.
 
+OBP-layout CSVs are loaded directly with Polars. The loader projects only timestamp,
+logged action, reward, propensity, position, and `user_feature_*` columns from the
+large interaction CSV, then encodes item metadata from `item_context.csv`. The default
+context encoding is normalized categorical codes for performance; set
+`context_encoding: one_hot` only when an OBP-style one-hot user context is required
+and sufficient memory is available. `sort_by_timestamp: auto` preserves source order
+when timestamps are already monotonic and sorts only when needed.
+
 ## Local Data Layout
 
 Experiment inputs are expected under `data/`. Open Bandit runs may use either prepared
